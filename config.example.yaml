@@ -1,0 +1,52 @@
+# =====================================================================
+# Karuta bot config
+# =====================================================================
+# Copie para `config.yaml` e ajuste os IDs e caminhos para o seu setup.
+
+# ID do servidor (guild) e do canal onde o bot Karuta opera.
+# Pra pegar o ID: ative "Modo desenvolvedor" no Discord, clique direito
+# no servidor/canal e "Copiar ID".
+guild_id: "0000000000000000000"
+channel_id: "0000000000000000000"
+
+# ID oficial do bot Karuta (nao mude a menos que esteja em servidor de teste
+# com outro bot).
+karuta_bot_id: "646937666251915264"
+
+# Cooldown de pick em segundos. O cooldown real do Karuta e ~10 min;
+# 660s = 11min de margem.
+pick_cooldown_seconds: 660
+
+# Timeout para o drop aparecer apos o `kd` (segundos).
+drop_timeout_seconds: 8
+
+# Ordem em que as contas alternam o envio de `kd`.
+rotation_order: [a, b, c]
+
+# Qual botao cada conta clica (0-indexed: 0=carta1, 1=carta2, 2=carta3).
+pick_button_index:
+  a: 0
+  b: 1
+  c: 2
+
+# Configuracao por conta
+accounts:
+  a:
+    browser: chrome
+    profile_dir: ./profiles/account_a
+    # Se nao definir, usa o canal "chrome" do Playwright (Chrome estavel
+    # instalado pelo proprio playwright).
+    # executable_path: /usr/bin/google-chrome
+
+  b:
+    browser: brave
+    profile_dir: ./profiles/account_b
+    # Linux nativo: /usr/bin/brave-browser
+    # WSL apontando p/ Windows: /mnt/c/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe
+    executable_path: /usr/bin/brave-browser
+
+  c:
+    browser: opera_gx
+    profile_dir: ./profiles/account_c
+    # Opera GX so existe no Windows. Em WSL, aponte para o .exe via /mnt/c/...
+    executable_path: "/mnt/c/Users/SEU_USUARIO/AppData/Local/Programs/Opera GX/opera.exe"

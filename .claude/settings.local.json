@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/karuta --help)",
+      "Bash(.venv/bin/karuta scan *)",
+      "Bash(.venv/bin/python -m py_compile src/karuta/scanner.py src/karuta/cli.py)",
+      "Bash(.venv/bin/python -m py_compile src/karuta/scanner.py)",
+      "Bash(.venv/bin/python *)"
+    ]
+  }
+}
