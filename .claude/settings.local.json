@@ -9,7 +9,9 @@
       "Bash(.venv/bin/karuta scan *)",
       "Bash(.venv/bin/python -m py_compile src/karuta/scanner.py src/karuta/cli.py)",
       "Bash(.venv/bin/python -m py_compile src/karuta/scanner.py)",
-      "Bash(.venv/bin/python *)"
+      "Bash(.venv/bin/python *)",
+      "Bash(identify \"image copy 5.png\")",
+      "Bash(pip install *)"
     ]
   }
 }

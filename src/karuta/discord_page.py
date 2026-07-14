@@ -126,12 +126,49 @@ async def click_next_page_reaction(
     timeout_ms: int = 5000,
 ) -> bool:
     """
-    Clica na reaction de 'proxima pagina' do embed identificado por message_id.
-    Tenta varios nomes conhecidos. Retorna True se conseguiu clicar.
+    Karuta tem 4 botoes de paginacao em sequencia: ⏪ ◀ ▶ ⏩
+    O 3o botao (index 2) eh '▶ proxima pagina'.
+    Tenta clicar via index, e por aria-label como fallback (caso mude).
+    Retorna True se conseguiu clicar.
     """
     msg = page.locator(f'li[id$="-{message_id}"]')
-    for prefix in _NEXT_PAGE_LABEL_PREFIXES:
-        sel = f'div[role="button"][aria-label^="{prefix}"]'
+
+    # 1) Karuta usa Discord Buttons; navegacao tem 4 botoes ⏪◀▶⏩.
+    #    O button#2 (0-indexed) eh '▶ proxima'.
+    try:
+        all_buttons = msg.locator("button")
+        count = await all_buttons.count()
+        if count >= 4:
+            btn = all_buttons.nth(2)  # ▶ next
+            try:
+                disabled = await btn.is_disabled()
+            except Exception:
+                disabled = False
+            if disabled:
+                # Ja na ultima pagina
+                return False
+            try:
+                await btn.wait_for(state="visible", timeout=timeout_ms)
+                await btn.click()
+                return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 2) Fallback: tenta por aria-label (caso Karuta mude pra buttons rotulados)
+    button_selectors = [
+        'button[aria-label*="arrow_forward" i]',
+        'button[aria-label*="next page" i]',
+        'button[aria-label*="next" i]',
+        'button[aria-label*="forward" i]',
+        'button[aria-label*="proxima" i]',
+        'button[aria-label*="próxima" i]',
+    ]
+    reaction_selectors = [
+        f'div[role="button"][aria-label^="{p}"]' for p in _NEXT_PAGE_LABEL_PREFIXES
+    ]
+    for sel in button_selectors + reaction_selectors:
         btn = msg.locator(sel).last
         try:
             if await btn.count() == 0:
@@ -142,6 +179,53 @@ async def click_next_page_reaction(
         except Exception:
             continue
     return False
+
+
+async def is_next_page_disabled(page: Page, message_id: str) -> bool:
+    """True se o botao ▶ esta desabilitado (estamos na ultima pagina)."""
+    msg = page.locator(f'li[id$="-{message_id}"]')
+    try:
+        all_buttons = msg.locator("button")
+        if await all_buttons.count() >= 4:
+            return await all_buttons.nth(2).is_disabled()
+    except Exception:
+        pass
+    return False
+
+
+async def dump_message_html(page: Page, message_id: str, save_path) -> bool:
+    """Salva o outerHTML da mensagem para inspecionar estrutura DOM."""
+    from pathlib import Path
+
+    msg = page.locator(f'li[id$="-{message_id}"]')
+    try:
+        html = await msg.evaluate("el => el.outerHTML")
+        p = Path(save_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(html, encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+async def list_message_buttons(page: Page, message_id: str) -> list[dict]:
+    """Lista todos os <button> dentro da mensagem com seus aria-labels e textos."""
+    msg = page.locator(f'li[id$="-{message_id}"]')
+    buttons = msg.locator("button")
+    out: list[dict] = []
+    try:
+        count = await buttons.count()
+        for i in range(count):
+            b = buttons.nth(i)
+            try:
+                label = await b.get_attribute("aria-label")
+                text = (await b.inner_text()) or ""
+                out.append({"index": i, "aria_label": label or "", "text": text.strip()[:50]})
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
 
 
 async def wait_for_message_text_change(

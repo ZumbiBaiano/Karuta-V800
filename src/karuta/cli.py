@@ -105,7 +105,14 @@ def status():
 
 @app.command()
 def scan(
-    base_min: Annotated[int, typer.Option(help="Filtra cartas com Base value >= esse valor.")] = 40,
+    base_min: Annotated[int, typer.Option(help="Match se Base value >= este valor.")] = 40,
+    effort_min: Annotated[
+        int,
+        typer.Option(
+            help="Match se Effort total >= este valor (OR com base_min)."
+            " Effort eh o que importa pro worker: 90+ eh bom.",
+        ),
+    ] = 90,
     accounts: Annotated[
         str,
         typer.Option(help="IDs separados por virgula (ex: a,b,c). Default: todas do config."),
@@ -116,10 +123,10 @@ def scan(
     command_gap: Annotated[
         float,
         typer.Option(
-            help="Intervalo minimo entre comandos enviados ao Karuta (segundos)."
-            " 7s elimina a maioria dos cooldown-retries.",
+            help="Intervalo minimo entre comandos ao Karuta (segundos)."
+            " Cooldown do k!wi eh ~10s; 11s evita os retries de cooldown.",
         ),
-    ] = 7.0,
+    ] = 11.0,
     max_cards: Annotated[
         int, typer.Option(help="Limite de cartas por conta. 0 = sem limite."),
     ] = 0,
@@ -168,6 +175,7 @@ def scan(
             cfg,
             ids,
             base_min=base_min,
+            effort_min=effort_min,
             output=output,
             command_gap=command_gap,
             max_cards=max_cards or None,
@@ -193,6 +201,7 @@ async def _scan_flow(
     account_ids: list[AccountId],
     *,
     base_min: int,
+    effort_min: int,
     output: str,
     command_gap: float,
     max_cards: int | None,
@@ -211,7 +220,7 @@ async def _scan_flow(
     results_by_account: dict[str, list[CardScan]] = {aid: [] for aid in account_ids}
 
     def write_md() -> None:
-        md = render_markdown(results_by_account, base_min=base_min)
+        md = render_markdown(results_by_account, base_min=base_min, effort_min=effort_min)
         out_path.write_text(md, encoding="utf-8")
 
     def on_match(aid: str, scan: CardScan) -> None:
@@ -232,6 +241,7 @@ async def _scan_flow(
                 await scan_account(
                     account,
                     base_min=base_min,
+                    effort_min=effort_min,
                     command_gap_seconds=command_gap,
                     max_cards=max_cards,
                     max_pages=max_pages,
