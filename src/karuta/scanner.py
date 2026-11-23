@@ -203,6 +203,9 @@ CARD_CODE_RE = re.compile(r"\b([a-z0-9]{7})\b")
 PRINT_RE = re.compile(r"#(\d+)")
 EDITION_RE = re.compile(r"◈\s*(\d+)")
 WISHLIST_RE = re.compile(r"♡\s*(\d+)")
+# O que vem logo depois do codigo numa linha da colecao: o separador e entao
+# as estrelas ou o numero de print. Ex: "vfxb9gd · ★★★★ · #5578".
+SEPARADOR_APOS_CODE_RE = re.compile(r"\s*·\s*[★☆#]")
 
 # Palavras de 7 chars que nao sao codes (pra excluir falsos positivos do CARD_CODE_RE).
 # Codes do Karuta PODEM ser so letras (ex: vfdcdxw) — entao NAO exigimos digito.
@@ -275,6 +278,17 @@ def parse_collection_entries(text: str, window: int = 90) -> list[CollectionEntr
         print_m = PRINT_RE.search(chunk)
         if not print_m:
             # Nao tem #<num> proximo, provavelmente nao eh linha de carta.
+            continue
+
+        # O #<print> proximo nao basta como prova. Palavras de 7 letras em
+        # nomes de serie ou personagem ("journey", "despair") caem na mesma
+        # janela e viravam codigos falsos — que depois entram num lote de
+        # multitrade, o Karuta ignora, e o lote inteiro e abortado.
+        #
+        # Na listagem o codigo e sempre seguido de " · " e entao estrelas ou
+        # o #print; um nome de serie e seguido de outro nome. Esse e o sinal
+        # que separa os dois.
+        if not SEPARADOR_APOS_CODE_RE.match(chunk):
             continue
 
         edition_m = EDITION_RE.search(chunk)
