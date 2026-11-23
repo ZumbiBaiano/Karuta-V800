@@ -369,6 +369,11 @@ async def click_pick_button(
     """
     emoji = EMOJIS_CARTA[button_index]
     name = _REACTION_NAMES[button_index]
+    # Modal do Discord por cima do chat intercepta o clique na reaction, e o
+    # Playwright so desiste depois de ~30s — tarde demais, a carta ja foi.
+    # Este e o caminho mais sensivel a tempo do bot, entao vale o count()
+    # extra: quando nao ha modal aberto, dismiss_overlays sai na hora.
+    await dismiss_overlays(page)
     # Mira na mensagem exata do drop pelo message_id (sufixo do id do <li>).
     # Karuta adiciona as reactions 1, 2, 3 em sequencia com pequeno delay,
     # entao wait_for fica pollando ate a nossa surgir.
@@ -676,12 +681,38 @@ async def wait_for_message_text_change(
     return False
 
 
-async def dump_recent_messages(page: Page, out_path) -> None:
-    """Salva HTML das ultimas 5 mensagens do canal (debug de localizadores)."""
+async def estado_da_pagina(page: Page) -> dict:
+    """
+    Estado fora das mensagens que costuma explicar um clique que nao passa.
+
+    Existe porque o dump de mensagens sozinho e cego pro motivo mais comum:
+    um modal do Discord vive em layerContainer, irmao do chat, e nunca cai
+    dentro dos <li> — foi assim que uma investigacao de falha de pick deu
+    "sem modal" quando ninguem tinha olhado o lugar certo.
+    """
     try:
+        return {
+            "scrims": await page.locator(OVERLAY_SELECTOR).count(),
+            "dialogs": await page.locator('[role="dialog"]').count(),
+            "url": page.url,
+            "visivel": await page.evaluate(
+                "() => document.visibilityState"
+            ),
+        }
+    except Exception as e:
+        return {"erro": str(e)[:200]}
+
+
+async def dump_recent_messages(page: Page, out_path) -> None:
+    """
+    Salva HTML das ultimas 5 mensagens do canal (debug de localizadores),
+    precedido do estado da pagina — veja estado_da_pagina.
+    """
+    try:
+        estado = await estado_da_pagina(page)
         messages = page.locator('li[id^="chat-messages-"]')
         count = await messages.count()
-        recent = []
+        recent = [f"<!-- estado da pagina: {estado} -->"]
         for i in range(max(0, count - 5), count):
             html = await messages.nth(i).evaluate("el => el.outerHTML")
             recent.append(html)

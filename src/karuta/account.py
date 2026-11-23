@@ -12,6 +12,7 @@ from .discord_page import (
     click_event_icon,
     click_pick_button,
     dump_recent_messages,
+    estado_da_pagina,
     find_event_icons,
     goto_channel,
     send_message,
@@ -138,7 +139,10 @@ class Account:
         if ok:
             self.log.info(f"picou botao {number} (msg {message_id})")
         else:
-            self.log.warning(f"falhou pick botao {number} (msg {message_id})")
+            estado = await estado_da_pagina(self.page)
+            self.log.warning(
+                f"falhou pick botao {number} (msg {message_id}) — {estado}"
+            )
             dump_path = f"./logs/dom_dump_{self.id}_{int(time.time())}.html"
             await dump_recent_messages(self.page, dump_path)
             self.log.warning(f"DOM salvo em {dump_path}")
