@@ -435,6 +435,14 @@ def transferir_cmd(
     from . import db
 
     conn = db.conectar(cfg.banco.dsn)
+
+    if da_colecao:
+        asyncio.run(_transferir_da_colecao_flow(
+            cfg, conn, de, para, lote=lote, max_cartas=max_cartas,
+            min_desejos=min_desejos, max_paginas=max_paginas, dry_run=dry_run,
+        ))
+        return
+
     pendentes = db.cartas_para_transferir(conn, de, para, limite=max_cartas)
     if not pendentes:
         typer.echo(f"nada a transferir de '{de}' para '{para}'")
@@ -461,6 +469,90 @@ def transferir_cmd(
                                  de, para, lote))
 
 
+async def _transferir_da_colecao_flow(
+    cfg, conn, de: str, para: str, *, lote: int, max_cartas: int,
+    min_desejos: int, max_paginas: int, dry_run: bool,
+) -> None:
+    """
+    Le a colecao real da conta de origem e transfere as melhores.
+
+    Pede ao Karuta a colecao JA ORDENADA por desejo decrescente, entao as
+    melhores vem nas primeiras paginas e nao e preciso ler as 2000+ cartas
+    pra achar as boas — o que levaria muito tempo e muitos comandos.
+
+    Usa Account em vez de abrir paginas na mao porque _collect_all_entries
+    precisa de canal_info() e do paginador que ja existe no scanner.
+    """
+    from . import db
+    from .scanner import CommandRateLimiter, _collect_all_entries
+
+    comando = "k!c sort by wishlist descending"
+    paginas = max_paginas or 10_000
+
+    async with async_playwright() as pw:
+        acc_orig = Account(id=de, cfg=cfg.accounts[de],
+                           button_index=cfg.pick_button_index[de])
+        acc_dest: Account | None = None
+        await acc_orig.start(pw, cfg)
+        try:
+            limiter = CommandRateLimiter(cfg.avaliacao.intervalo_comandos)
+            logger.info(f"lendo colecao de '{de}' ({comando})")
+            entradas = await _collect_all_entries(
+                acc_orig, limiter, paginas, comando=comando,
+            )
+            logger.info(f"colecao de '{de}': {len(entradas)} cartas lidas")
+            if not entradas:
+                logger.error("nenhuma carta lida — abortando")
+                return
+
+            conhecidas = db.registrar_cartas_da_colecao(conn, entradas, de)
+            logger.info(f"banco agora conhece {conhecidas} cartas de '{de}'")
+
+            ja_foram = db.codigos_ja_transferidos(conn, de, para)
+            boas = sorted(
+                (e for e in entradas
+                 if e.wishlist >= min_desejos and e.code not in ja_foram),
+                key=lambda e: e.wishlist, reverse=True,
+            )
+            if max_cartas:
+                boas = boas[:max_cartas]
+
+            tabela = Table(title=f"{len(boas)} cartas com desejos >= {min_desejos}")
+            for col in ("codigo", "desejos", "★", "print", "edicao"):
+                tabela.add_column(col)
+            for e in boas[:15]:
+                tabela.add_row(e.code, str(e.wishlist), "★" * e.stars or "—",
+                               f"#{e.print_num}", f"◈{e.edition}")
+            console.print(tabela)
+            if len(boas) > 15:
+                console.print(f"  ... e mais {len(boas) - 15}")
+
+            if not boas:
+                logger.info("nada acima do limiar")
+                return
+            if dry_run:
+                console.print("[yellow]dry-run: nada foi enviado[/yellow]")
+                return
+
+            # O destino so sobe depois de saber que ha o que mover: subir um
+            # navegador a toa custa ~1 min e 700 MB.
+            acc_dest = Account(id=para, cfg=cfg.accounts[para],
+                               button_index=cfg.pick_button_index[para])
+            await acc_dest.start(pw, cfg)
+            await _rodar_sessoes(
+                cfg, conn, await acc_dest.canal_info(),
+                await acc_orig.canal_info(),
+                [e.code for e in boas], de, para, lote,
+            )
+        finally:
+            for acc in (acc_dest, acc_orig):
+                if acc is not None:
+                    try:
+                        await acc.stop()
+                    except Exception:
+                        pass
+
+
 async def _transferir_flow(cfg, conn, codigos: list[str], de: str, para: str,
                            lote: int) -> None:
     """
@@ -473,21 +565,7 @@ async def _transferir_flow(cfg, conn, codigos: list[str], de: str, para: str,
     gravasse antes, uma sessao expirada deixaria o banco dizendo que a carta
     mudou de dono sem ela ter saido do lugar.
     """
-    from . import db
-    from .discord_page import (
-        MT_ACEITAR,
-        MT_CONFIRMAR,
-        MT_TRAVAR,
-        mt_aceita,
-        mt_adicionar_cartas,
-        mt_botoes,
-        mt_clicar,
-        mt_localizar_sessao,
-    )
-
-    id_origem = cfg.accounts[de].discord_user_id
     canal = cfg.canal_info_id or cfg.channel_id
-    total_ok = 0
 
     async with async_playwright() as pw:
         # Os dois navegadores sobem ANTES de qualquer comando: a sessao de
@@ -504,25 +582,7 @@ async def _transferir_flow(cfg, conn, codigos: list[str], de: str, para: str,
             await goto_channel(pg_dest, cfg.guild_id, canal)
             await goto_channel(pg_orig, cfg.guild_id, canal)
             logger.info(f"contas '{para}' e '{de}' prontas no canal {canal}")
-
-            for i in range(0, len(codigos), lote):
-                parte = codigos[i:i + lote]
-                n = i // lote + 1
-                logger.info(f"sessao {n}: {len(parte)} cartas")
-                ok = await _uma_sessao(
-                    pg_dest, pg_orig, id_origem, parte,
-                    MT_ACEITAR, MT_TRAVAR, MT_CONFIRMAR,
-                    mt_localizar_sessao, mt_botoes, mt_clicar,
-                    mt_adicionar_cartas, mt_aceita,
-                )
-                if ok:
-                    gravadas = db.transferir_cartas(conn, parte, de, para)
-                    total_ok += len(parte)
-                    logger.info(f"sessao {n} aceita; {gravadas} registradas no banco")
-                else:
-                    logger.error(f"sessao {n} falhou; cartas seguem com '{de}'")
-                    break
-                await asyncio.sleep(12)  # folga entre sessoes
+            await _rodar_sessoes(cfg, conn, pg_dest, pg_orig, codigos, de, para, lote)
         finally:
             for c in (ctx_orig, ctx_dest):
                 try:
@@ -530,57 +590,154 @@ async def _transferir_flow(cfg, conn, codigos: list[str], de: str, para: str,
                 except Exception:
                     pass
 
+
+async def _rodar_sessoes(cfg, conn, pg_dest, pg_orig, codigos: list[str],
+                         de: str, para: str, lote: int) -> int:
+    """
+    Quebra os codigos em lotes e roda uma sessao de multitrade por lote.
+
+    Para no primeiro lote que falhar em vez de seguir: se uma sessao nao
+    fechou, algo mudou no fluxo (sessao expirando, botao diferente, carta
+    recusada) e insistir so acumularia falha.
+    """
+    from . import db
+    from .discord_page import (
+        MT_ACEITAR,
+        MT_CONFIRMAR,
+        MT_TRAVAR,
+        mt_aceita,
+        mt_adicionar_cartas,
+        mt_botoes,
+        mt_clicar,
+        mt_localizar_sessao,
+    )
+
+    id_origem = cfg.accounts[de].discord_user_id
+    total_ok = 0
+    sessao_anterior: str | None = None
+    for i in range(0, len(codigos), lote):
+        parte = codigos[i:i + lote]
+        n = i // lote + 1
+        logger.info(f"sessao {n}: {len(parte)} cartas")
+        ok, sessao_anterior = await _uma_sessao(
+            pg_dest, pg_orig, id_origem, parte,
+            MT_ACEITAR, MT_TRAVAR, MT_CONFIRMAR,
+            mt_localizar_sessao, mt_botoes, mt_clicar,
+            mt_adicionar_cartas, mt_aceita,
+            sessao_anterior=sessao_anterior,
+        )
+        if not ok:
+            logger.error(f"sessao {n} falhou; cartas seguem com '{de}'")
+            break
+        gravadas = db.transferir_cartas(conn, parte, de, para)
+        total_ok += len(parte)
+        logger.info(f"sessao {n} aceita; {gravadas} registradas no banco")
+        # Folga curta entre sessoes. Era 12s por precaucao, mas a espera
+        # ativa pela sessao NOVA ja cobre o rate limit do k!multitrade — se
+        # o Karuta demorar, o laco de _uma_sessao aguarda ate 20s em vez de
+        # pegar a sessao velha, que era o risco real.
+        await asyncio.sleep(3)
+
     logger.info(f"total transferido: {total_ok} de {len(codigos)}")
+    return total_ok
+
+
+async def _ids_mensagens(page) -> list[str]:
+    """IDs das mensagens atualmente no canal."""
+    return await page.evaluate(
+        """() => [...document.querySelectorAll('li[id^="chat-messages-"]')]
+                 .map(li => li.id.split('-').pop())"""
+    )
 
 
 async def _uma_sessao(pg_dest, pg_orig, id_origem, codigos, ACEITAR, TRAVAR,
                       CONFIRMAR, localizar, botoes, clicar, adicionar,
-                      aceita) -> bool:
-    """Uma sessao de multitrade do inicio ao aceite. True se concluiu."""
-    await send_message(pg_dest, f"k!multitrade <@{id_origem}>")
-    await asyncio.sleep(5)
+                      aceita, sessao_anterior: str | None = None,
+                      ) -> tuple[bool, str | None]:
+    """
+    Uma sessao de multitrade do inicio ao aceite.
 
-    mid = await localizar(pg_orig)
+    Avanca por ESTADO, nao por relogio: cada etapa espera o Karuta mudar a
+    mensagem e segue no mesmo instante. A versao anterior usava sleep fixo em
+    cada passo, o que somava ~29s por sessao mesmo quando o Karuta respondia
+    em menos de um segundo.
+
+    Devolve (concluiu, id_da_sessao). O id volta pro chamador porque a
+    proxima rodada precisa saber qual ignorar: se o k!multitrade novo
+    demorar por rate limit, procurar "a ultima sessao" devolveria esta aqui
+    e os codigos seguintes iriam pra uma sessao que ja acabou.
+    """
+    from .discord_page import mt_esperar
+
+    # Fotografa as mensagens ANTES de pedir a troca. Procurar depois por
+    # "a sessao mais recente com botao de aceitar" nao basta: rodadas
+    # anteriores deixam pedidos pendentes no canal que ainda exibem o botao,
+    # e aceitar um deles clica num pedido ja expirado — a sessao nunca abre e
+    # o erro aparece como se o Karuta estivesse recusando.
+    antes = set(await _ids_mensagens(pg_orig))
+    await send_message(pg_dest, f"k!multitrade <@{id_origem}>")
+
+    mid = None
+    for _ in range(40):
+        await asyncio.sleep(0.5)
+        candidato = await localizar(pg_orig, ignorar=sessao_anterior)
+        if candidato and candidato not in antes:
+            mid = candidato
+            break
     if not mid:
-        logger.error("a origem nao viu o pedido de trade")
-        return False
+        logger.error("o Karuta nao criou uma sessao nova para este pedido")
+        return False, sessao_anterior
 
     if not await clicar(pg_orig, mid, ACEITAR):
         logger.error(f"origem nao conseguiu aceitar (botao {ACEITAR})")
-        return False
-    await asyncio.sleep(4)
+        return False, mid
+
+    # A sessao abriu quando o botao de travar aparece no lugar do de aceitar.
+    if not await mt_esperar(pg_orig, mid, lambda t, e: TRAVAR in e):
+        logger.error("sessao nao abriu apos o aceite")
+        return False, mid
 
     await adicionar(pg_orig, codigos)
-    await asyncio.sleep(4)
 
-    # Confere que as cartas entraram antes de travar: travar com a lista
-    # incompleta fecharia a troca pela metade.
-    faltando = await _faltando_na_sessao(pg_orig, mid, codigos)
-    if faltando:
+    # Espera os codigos aparecerem no painel. Checar o ULTIMO da lista basta:
+    # o Karuta processa a mensagem inteira de uma vez, entao se o ultimo
+    # entrou, os anteriores tambem entraram.
+    if not await mt_esperar(pg_orig, mid, lambda t, e: codigos[-1] in t,
+                            timeout=25.0):
+        faltando = await _faltando_na_sessao(pg_orig, mid, codigos)
         logger.error(f"nao entraram na sessao: {faltando[:5]}"
                      f"{'...' if len(faltando) > 5 else ''}")
         await clicar(pg_orig, mid, "❌")
-        return False
+        return False, mid
+
+    # Confere a lista inteira antes de travar: travar com lista incompleta
+    # fecharia a troca pela metade.
+    faltando = await _faltando_na_sessao(pg_orig, mid, codigos)
+    if faltando:
+        logger.error(f"faltaram na sessao: {faltando[:5]}"
+                     f"{'...' if len(faltando) > 5 else ''}")
+        await clicar(pg_orig, mid, "❌")
+        return False, mid
 
     for pg, quem in ((pg_orig, "origem"), (pg_dest, "destino")):
         if not await clicar(pg, mid, TRAVAR):
             logger.error(f"{quem} nao conseguiu travar")
-            return False
-        await asyncio.sleep(3)
+            return False, mid
 
-    await asyncio.sleep(3)
-    if CONFIRMAR not in await botoes(pg_dest, mid):
+    # Com os dois travados o Karuta troca os botoes para ❌/✅.
+    if not await mt_esperar(pg_dest, mid, lambda t, e: CONFIRMAR in e):
         logger.error("etapa de confirmacao nao apareceu apos travar")
-        return False
+        return False, mid
 
     for pg, quem in ((pg_dest, "destino"), (pg_orig, "origem")):
         if not await clicar(pg, mid, CONFIRMAR):
             logger.error(f"{quem} nao conseguiu confirmar")
-            return False
-        await asyncio.sleep(3)
+            return False, mid
 
-    await asyncio.sleep(4)
-    return await aceita(pg_dest, mid)
+    ok = await mt_esperar(
+        pg_dest, mid, lambda t, e: "trade has been accepted" in t.lower(),
+    )
+    return ok, mid
 
 
 async def _faltando_na_sessao(page, message_id: str, codigos: list[str]) -> list[str]:

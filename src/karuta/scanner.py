@@ -202,6 +202,7 @@ CARD_CODE_RE = re.compile(r"\b([a-z0-9]{7})\b")
 # code e #print.
 PRINT_RE = re.compile(r"#(\d+)")
 EDITION_RE = re.compile(r"◈\s*(\d+)")
+WISHLIST_RE = re.compile(r"♡\s*(\d+)")
 
 # Palavras de 7 chars que nao sao codes (pra excluir falsos positivos do CARD_CODE_RE).
 # Codes do Karuta PODEM ser so letras (ex: vfdcdxw) — entao NAO exigimos digito.
@@ -246,6 +247,9 @@ class CollectionEntry:
     stars: int = 0       # 1-4 (numero de ★ na linha) — 0 se nao foi possivel ler
     print_num: int = 0   # ex: 1368 — 0 se nao foi possivel ler
     edition: int = 0     # ex: 7 — 0 se nao foi possivel ler
+    # Desejos (♡N). So aparece quando o k!c vai ordenado por wishlist; com
+    # 'k!c' puro a linha nao traz esse prefixo e o campo fica 0.
+    wishlist: int = 0
 
 
 def parse_collection_entries(text: str, window: int = 90) -> list[CollectionEntry]:
@@ -279,12 +283,19 @@ def parse_collection_entries(text: str, window: int = 90) -> list[CollectionEntr
         # Stars sao todos os ★ entre o code e o #<print>
         stars = chunk[: print_m.start()].count("★")
 
+        # Desejos vem ANTES do code ('♡781 · vfxb9gd · ...'), entao olha pra
+        # tras numa janela curta. Janela curta de proposito: larga demais
+        # pegaria o ♡ da carta anterior da lista.
+        antes = text[max(0, m.start() - 24) : m.start()]
+        wl_m = WISHLIST_RE.search(antes)
+
         entries.append(
             CollectionEntry(
                 code=code,
                 stars=stars,
                 print_num=int(print_m.group(1)),
                 edition=edition,
+                wishlist=int(wl_m.group(1)) if wl_m else 0,
             )
         )
         seen.add(code)
@@ -456,20 +467,25 @@ async def _collect_all_entries(
     account: Account,
     limiter: CommandRateLimiter,
     max_pages: int,
+    comando: str = "k!c",
 ) -> list[CollectionEntry]:
     """
-    FASE 1: envia k!c uma vez e pagina via botao ▶ ate o fim, coletando
+    FASE 1: envia o k!c uma vez e pagina via botao ▶ ate o fim, coletando
     todas as CollectionEntry. NAO faz k!wi aqui — paginacao rapida mantem
     os botoes do embed vivos (eles expiram apos minutos de inatividade).
+
+    `comando` permite pedir a colecao ordenada (ex: "k!c sort by wishlist
+    descending"), que e como o `karuta transferir --da-colecao` acha as
+    melhores cartas sem precisar avaliar as 2000+ uma a uma.
     """
     page = await account.canal_info()
 
-    account.log.info("scanner: [fase 1] k!c inicial")
+    account.log.info(f"scanner: [fase 1] {comando}")
     ok = await _send_with_cooldown_retry(
-        page, "k!c", limiter, settle_seconds=2.5,
+        page, comando, limiter, settle_seconds=2.5,
     )
     if not ok:
-        account.log.error("scanner: [fase 1] falha no k!c inicial")
+        account.log.error(f"scanner: [fase 1] falha no '{comando}' inicial")
         return []
 
     await asyncio.sleep(1.5)

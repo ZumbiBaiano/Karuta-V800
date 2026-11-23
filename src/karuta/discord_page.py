@@ -698,19 +698,46 @@ MT_CONFIRMAR = "✅"
 MT_EXPIRA_SEGUNDOS = 180
 
 
-async def mt_localizar_sessao(page: Page, lookback: int = 8) -> str | None:
-    """ID da mensagem da sessao de trade aberta, se houver."""
+async def mt_localizar_sessao(
+    page: Page, lookback: int = 8, ignorar: str | None = None,
+) -> str | None:
+    """
+    ID da mensagem de uma sessao de trade ABERTA, se houver.
+
+    Casa so com pedido pendente ou sessao em andamento. NAO casa com "The
+    trade has been accepted": essa e a sessao ja encerrada, e agarra-la fazia
+    o lote seguinte mandar os codigos pra uma sessao morta — os codigos sumiam
+    sem erro e a transferencia falhava sem explicacao.
+
+    `ignorar` descarta um id conhecido (o da sessao anterior), cobrindo o caso
+    em que o k!multitrade novo ainda nao chegou por rate limit: sem isso a
+    busca devolveria a sessao velha como se fosse a nova.
+    """
     return await page.evaluate(
-        """(n) => {
+        """([n, ignorar, aceitar]) => {
              const lis=[...document.querySelectorAll('li[id^="chat-messages-"]')];
              for (let i=lis.length-1; i>=Math.max(0,lis.length-n); i--) {
+               const id = lis[i].id.split('-').pop();
+               if (ignorar && id === ignorar) continue;
                const t = lis[i].innerText || '';
-               if (/Trade Request|trade session|trade has been/i.test(t))
-                 return lis[i].id.split('-').pop();
+               if (/trade has been/i.test(t)) continue;   // sessao encerrada
+               if (!/Trade Request|trade session/i.test(t)) continue;
+               // Exige o botao de aceitar presente. So o texto nao basta:
+               // sessao cancelada ou expirada mantem o texto e perde os
+               // botoes, e agarra-la fazia o lote inteiro falhar sem causa
+               // aparente — principalmente entre execucoes, quando o
+               // `ignorar` do processo anterior ja nao existe.
+               const temAceitar = [...lis[i].querySelectorAll('button')]
+                 .some(b => {
+                   const im = b.querySelector('img[data-name]');
+                   return im && im.getAttribute('data-name') === aceitar
+                          && !b.hasAttribute('disabled');
+                 });
+               if (temAceitar) return id;
              }
              return null;
            }""",
-        lookback,
+        [lookback, ignorar, MT_ACEITAR],
     )
 
 
@@ -763,6 +790,41 @@ async def mt_adicionar_cartas(page: Page, codigos: list[str]) -> None:
     await box.press("Delete")
     await box.fill(",".join(codigos))
     await box.press("Enter")
+
+
+async def mt_esperar(
+    page: Page,
+    message_id: str,
+    condicao,
+    timeout: float = 20.0,
+    intervalo: float = 0.4,
+) -> bool:
+    """
+    Espera a sessao satisfazer `condicao(texto, emojis)`, checando a cada 0.4s.
+
+    Substitui os sleep fixos que havia em cada etapa. Alem de mais rapido no
+    caso comum (o Karuta costuma responder em <1s), e mais confiavel: o sleep
+    cego ora esperava demais, ora seguia antes do Karuta ter processado.
+    """
+    import time as _t
+
+    limite = _t.time() + timeout
+    while _t.time() < limite:
+        estado = await page.evaluate(
+            """(mid) => {
+                 const li = document.querySelector(`li[id$="-${mid}"]`);
+                 if (!li) return null;
+                 const emojis = [...li.querySelectorAll('button')]
+                   .map(b => b.querySelector('img[data-name]'))
+                   .filter(Boolean).map(i => i.getAttribute('data-name'));
+                 return {texto: li.innerText || '', emojis};
+               }""",
+            message_id,
+        )
+        if estado and condicao(estado["texto"], estado["emojis"]):
+            return True
+        await asyncio.sleep(intervalo)
+    return False
 
 
 async def mt_aceita(page: Page, message_id: str) -> bool:

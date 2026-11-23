@@ -808,6 +808,51 @@ def inventario_desatualizado(
     return float(r["idade"]) >= minutos
 
 
+def registrar_cartas_da_colecao(
+    conn: psycopg.Connection, entradas: list, conta_id: str,
+) -> int:
+    """
+    Cadastra cartas vistas na listagem do k!c que o banco ainda nao conhecia.
+
+    Existe porque o banco so tinha as cartas que o bot pegou ele mesmo: a
+    conta 'b' tinha 2377 cartas no Karuta e 723 aqui. Sem isto, consolidar
+    "as cartas boas" operaria sobre uma fracao arbitraria da colecao.
+
+    So grava o que a linha do k!c oferece (estrelas, #print, edicao, desejos).
+    valor_base e esforco_total ficam nulos — esses exigem k!wi carta a carta,
+    e sao 2000+ cartas. Como `avaliada_em` segue NULL, elas aparecem como
+    pendentes no resumo, que e exatamente o que sao.
+
+    Retorna quantas eram realmente novas.
+    """
+    if not entradas:
+        return 0
+
+    dados = [
+        (e.code, conta_id, e.stars, e.print_num, e.edition,
+         e.wishlist if e.wishlist else None)
+        for e in entradas
+    ]
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO cartas (codigo, conta_id, estrelas, numero_print,"
+            "                    edicao, desejos, origem)"
+            " VALUES (%s, %s, %s, %s, %s, %s, 'scan')"
+            " ON CONFLICT (codigo) DO UPDATE SET"
+            # Nao toca em conta_id: a carta pode ter mudado de dono e quem
+            # manda nisso e transferir_cartas, nao a listagem.
+            "   estrelas     = EXCLUDED.estrelas,"
+            "   numero_print = EXCLUDED.numero_print,"
+            "   edicao       = EXCLUDED.edicao,"
+            "   desejos      = COALESCE(EXCLUDED.desejos, cartas.desejos)",
+            dados,
+        )
+    existentes = conn.execute(
+        "SELECT count(*) AS n FROM cartas WHERE conta_id = %s", (conta_id,)
+    ).fetchone()
+    return existentes["n"]
+
+
 def transferir_cartas(
     conn: psycopg.Connection, codigos: list[str], de: str, para: str,
 ) -> int:
