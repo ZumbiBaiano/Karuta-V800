@@ -435,7 +435,13 @@ def painel_cmd(
 def transferir_cmd(
     de: Annotated[str, typer.Option(help="Conta de origem (b ou c).")],
     para: Annotated[str, typer.Option(help="Conta de destino.")] = "a",
-    lote: Annotated[int, typer.Option(help="Cartas por sessao de multitrade.")] = 30,
+    lote: Annotated[
+        int,
+        typer.Option(
+            help="Cartas por sessao de multitrade. 50 e o maximo que o Karuta"
+            " aceita — com 75 ou 100 os codigos nao entram na sessao.",
+        ),
+    ] = 50,
     max_cartas: Annotated[int, typer.Option(help="Teto total. 0 = todas.")] = 0,
     da_colecao: Annotated[
         bool,
