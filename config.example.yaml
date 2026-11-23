@@ -7,7 +7,14 @@
 # Pra pegar o ID: ative "Modo desenvolvedor" no Discord, clique direito
 # no servidor/canal e "Copiar ID".
 guild_id: "0000000000000000000"
+# Canal do drop: onde rodam `kd`, `krm` e os cliques de pick.
 channel_id: "0000000000000000000"
+
+# Canal onde rodam os comandos de INFORMACAO das cartas (k!ci, k!wi, k!lu,
+# kb, k!i, k!bi) e tambem o `karuta scan`. Separar mantem o canal de drop
+# limpo, so com `kd` e as reactions disputadas.
+# Deixe vazio ("") para mandar tudo no mesmo canal do drop.
+info_channel_id: "0000000000000000000"
 
 # ID oficial do bot Karuta (nao mude a menos que esteja em servidor de teste
 # com outro bot).
