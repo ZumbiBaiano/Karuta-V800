@@ -21,6 +21,13 @@ ExecStart={{PROJECT_DIR}}/.venv/bin/karuta start
 Restart=on-failure
 RestartSec=30
 
+# Recicla a cada 24h. O Chromium vaza ~50 MB/h (medido em 3h de operacao,
+# tendencia +51 MB/h), entao em um dia o conjunto sai de ~2,5 GB para ~4 GB.
+# Nao e vazamento rapido o bastante pra justificar reload de aba no meio da
+# operacao — reiniciar o processo inteiro uma vez por dia resolve, e cai no
+# Restart=on-failure acima porque o systemd marca RuntimeMaxSec como falha.
+RuntimeMaxSec=86400
+
 # Logs vao para journald (acessivel via journalctl)
 StandardOutput=journal
 StandardError=journal
