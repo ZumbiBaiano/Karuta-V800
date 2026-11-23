@@ -159,23 +159,101 @@ cp .env.example .env
 # editar config.yaml com guild_id, channel_id, info_channel_id e caminhos dos navegadores
 ```
 
-### 3. Login manual em cada conta (uma vez)
+Campos que valem atenção:
 
-Cada navegador abre numa janela; logue na conta correspondente e feche. A sessão fica salva em `profiles/account_X`.
+| campo | padrão | |
+|---|---|---|
+| `guild_id` / `channel_id` | — | servidor e canal do drop |
+| `info_channel_id` | — | canal dos comandos de info. Vazio (`""`) manda tudo no canal de drop |
+| `headless` | `true` | sem janela. Necessário para rodar como service |
+| `carregar_imagens` | `false` | o bot lê o DOM, nunca pixels — desligar economiza memória. Ligue só para depurar com print legível |
+| `banco.dsn` | — | Postgres. A senha pode ficar fora daqui, na env `KARUTA_DB_DSN` do `.env` |
+| `accounts.*.discord_user_id` | `""` | ID numérico, usado pelo `transferir` (veja abaixo) |
+| `avaliacao.esforco_min_job` etc. | — | limiares de classificação. Mudaram? rode `karuta banco reclassificar` |
+
+### 3. Login em cada conta (uma vez)
+
+A sessão fica salva em `profiles/account_X` e sobrevive a restarts — só precisa refazer se o Discord expirar o token.
+
+Há três formas. **No WSL, prefira `--creds` ou `--qr`**: o modo com janela depende do WSLg conseguir pintar o Chromium, o que nesta máquina não acontece (a janela abre vazia).
 
 ```bash
-karuta login a   # abre Chrome → logar na conta A
-karuta login b   # abre Brave → logar na conta B
-karuta login c   # abre Opera GX → logar na conta C
+# Email/senha, sem janela. Pergunta no terminal, senha oculta, nada é gravado
+# em disco. Trata 2FA (pede o código) e aborta explicando se cair CAPTCHA.
+karuta login a --creds
+
+# QR code, sem janela. Salva o PNG em logs/qr_<conta>.png e refaz o print em
+# loop, porque o código do Discord expira a cada ~2min.
+karuta login a --qr          # escaneie em: Discord mobile > Config > Escanear QR
+
+# Com janela (Linux nativo com desktop). Logue e feche a janela.
+karuta login a
 ```
+
+Repita para `b` e `c`.
+
+#### ID de usuário de cada conta
+
+O comando `transferir` precisa do ID numérico do Discord de cada conta, em `config.yaml`:
+
+```yaml
+accounts:
+  a:
+    discord_user_id: "374720793197936650"
+```
+
+Para obter: Discord → Configurações → Avançado → **Modo de desenvolvedor**, depois botão direito no próprio perfil → *Copiar ID do usuário*. Precisa ser o ID: o Karuta recusa nome de usuário, e contas diferentes podem compartilhar o mesmo nome de exibição.
 
 ### 4. Rodar
 
 ```bash
 karuta start              # roda em foreground com logs no terminal
 karuta start --dry-run    # detecta drops mas nao envia kd nem clica
+karuta start --pick-only  # nao envia kd; pega qualquer drop que aparecer
 karuta status             # mostra cooldowns atuais
 ```
+
+Para rodar de forma permanente, veja [Rodar como service](#rodar-como-service-systemd) — é o modo recomendado, porque o bot sobrevive ao fechamento do terminal.
+
+## Transferir cartas entre contas
+
+Consolida as cartas numa conta só, via `k!multitrade`. Útil quando uma conta
+concentra o progresso (work permit, workers) e as outras só coletam.
+
+**Pare o bot antes**: os perfis do navegador ficam travados enquanto ele roda.
+
+```bash
+systemctl --user stop karuta
+
+# As cartas classificadas como job/desejada, segundo o banco
+karuta transferir --de b --para a
+
+# A coleção REAL do Karuta, ordenada por desejo — use quando a conta tiver
+# cartas que o bot nunca catalogou (o banco só conhece o que ele mesmo pegou)
+karuta transferir --de b --para a --da-colecao --min-desejos 50
+
+# Tudo, sem limiar
+karuta transferir --de b --para a --da-colecao --min-desejos 0
+
+karuta transferir --de b --para a --dry-run   # só lista, não envia
+
+systemctl --user start karuta
+```
+
+| opção | padrão | |
+|---|---|---|
+| `--lote` | 50 | cartas por sessão. **50 é o máximo**: 75 e 100 o Karuta recusa |
+| `--min-desejos` | 50 | com `--da-colecao`, limiar de ♡ |
+| `--max-paginas` | 12 | páginas de `k!c` a ler; `0` = todas |
+| `--max-cartas` | 0 | teto total; `0` = sem limite |
+
+**É idempotente.** A tabela `transferencias` registra cada carta movida, então
+interromper e religar é seguro: nada é reenviado nem duplicado. Rode de novo a
+qualquer momento para levar o que acumulou desde a última vez.
+
+O banco só é atualizado depois do Karuta confirmar (`"The trade has been
+accepted"`). Uma sessão que expira não deixa o banco afirmando uma
+transferência que não aconteceu.
 
 ## Plataforma
 
@@ -187,7 +265,10 @@ karuta status             # mostra cooldowns atuais
 
 ```
 src/karuta/
-├── cli.py              # comandos start / login / status
+├── cli.py              # comandos start / login / status / banco / transferir / painel
+├── avaliador.py        # extrai e classifica as cartas (sem Playwright nem banco)
+├── db.py               # esquema e persistencia em Postgres
+├── scanner.py          # varredura da colecao (k!c + k!wi), paginacao
 ├── config.py           # carrega config.yaml + .env
 ├── browser.py          # factory de BrowserContext (Chrome/Brave/Opera GX)
 ├── discord_page.py     # interagir com Discord: enviar msg, clicar botão
@@ -231,6 +312,18 @@ journalctl --user -u karuta -n 200 # ultimas 200 linhas
 ```bash
 ./scripts/uninstall-service.sh
 ```
+
+O service já vem com duas proteções configuradas:
+
+- **`Restart=on-failure`** — se o start falhar (Discord lento, uma conta sem
+  subir), ele tenta de novo sozinho em 30s, até 5 vezes em 10min.
+- **`RuntimeMaxSec=86400`** — recicla o processo a cada 24h. O Chromium vaza
+  memória de forma lenta mas constante; medido em ~50-85 MB/h, o que leva o
+  conjunto de ~2,5 GB para ~4 GB num dia. Reiniciar resolve, e é mais simples
+  (e menos arriscado) do que recarregar abas durante a operação.
+
+Habilitado no boot: como o service está em `default.target.wants`, ele sobe
+sozinho quando o WSL inicia — sem precisar abrir terminal.
 
 ### Notas pra WSL2
 
