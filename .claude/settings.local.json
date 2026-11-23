@@ -11,7 +11,20 @@
       "Bash(.venv/bin/python -m py_compile src/karuta/scanner.py)",
       "Bash(.venv/bin/python *)",
       "Bash(identify \"image copy 5.png\")",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(powershell.exe -NoProfile -Command \"Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate,AdapterRAM,VideoProcessor,Status | Format-List\")",
+      "Bash(./.venv/bin/python -m pytest tests/ -q)",
+      "Bash(./.venv/bin/python -m ruff check src/karuta/orchestrator.py --output-format=concise)",
+      "Bash(powershell.exe -NoProfile -Command '$d = Get-ItemProperty '\\\\''HKLM:\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\Dwm'\\\\'' -ErrorAction SilentlyContinue; '\\\\''OverlayTestMode = '\\\\'' + $\\(if \\($d.PSObject.Properties.Name -contains '\\\\''OverlayTestMode'\\\\''\\) { $d.OverlayTestMode } else { '\\\\''\\(NAO DEFINIDO - ajuste perdido\\)'\\\\'' }\\)')",
+      "Bash(powershell.exe -NoProfile -Command '$os = Get-CimInstance Win32_OperatingSystem; '\\\\''boot: '\\\\'' + $os.LastBootUpTime; '\\\\''uptime: '\\\\'' + [math]::Round\\(\\(\\(Get-Date\\) - $os.LastBootUpTime\\).TotalMinutes,1\\) + '\\\\'' min'\\\\''')",
+      "Bash(powershell.exe -NoProfile -Command '$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8; $boot = \\(Get-CimInstance Win32_OperatingSystem\\).LastBootUpTime; $e = Get-WinEvent -LogName Application -MaxEvents 3000 -ErrorAction SilentlyContinue | Where-Object { $_.Id -eq 1001 -and $_.Message -match '\\\\''LiveKernelEvent'\\\\'' -and $_.TimeCreated -gt $boot }; '\\\\''Travamentos de GPU DESDE O BOOT: '\\\\'' + $e.Count; '\\\\'''\\\\''; '\\\\''Ultimos travamentos registrados \\(antes do reboot\\):'\\\\''; Get-WinEvent -LogName Application -MaxEvents 3000 -ErrorAction SilentlyContinue | Where-Object { $_.Id -eq 1001 -and $_.Message -match '\\\\''LiveKernelEvent'\\\\'' } | Select-Object -First 3 TimeCreated | Format-Table -AutoSize')",
+      "Bash(powershell.exe -NoProfile -Command ' *)",
+      "WebFetch(domain:ankiweb.net)",
+      "Bash(./.venv/bin/python -c ' *)",
+      "WebFetch(domain:www.cobbledex.info)",
+      "Bash(powershell.exe *)",
+      "WebFetch(domain:game8.co)",
+      "WebFetch(domain:monsterhunterwilds.wiki.fextralife.com)"
     ]
   }
 }
