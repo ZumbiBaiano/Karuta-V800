@@ -51,6 +51,12 @@ accounts:
   a:
     browser: chrome
     profile_dir: ./profiles/account_a
+    # ID numerico do Discord, usado como alvo do `karuta transferir`
+    # (k!multitrade). Precisa ser o ID: o Karuta recusa nome de usuario, e
+    # contas diferentes podem compartilhar o mesmo nome de exibicao.
+    # Para pegar: Discord > Configuracoes > Avancado > Modo de desenvolvedor,
+    # depois botao direito no proprio perfil > Copiar ID do usuario.
+    discord_user_id: "000000000000000000"
     # Se nao definir, usa o canal "chrome" do Playwright (Chrome estavel
     # instalado pelo proprio playwright).
     # executable_path: /usr/bin/google-chrome
