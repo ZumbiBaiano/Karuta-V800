@@ -52,7 +52,15 @@ async def dismiss_overlays(page: Page, tentativas: int = 3) -> bool:
 
 
 async def goto_channel(page: Page, guild_id: str, channel_id: str) -> None:
-    await page.goto(channel_url(guild_id, channel_id), wait_until="domcontentloaded")
+    # O timeout da NAVEGACAO tambem precisa da folga, nao so o da caixa de
+    # texto abaixo: com as 3 contas subindo juntas o goto passou dos 30s
+    # padrao do Playwright e derrubou o start inteiro, mesmo ja havendo 90s
+    # de margem para o passo seguinte.
+    await page.goto(
+        channel_url(guild_id, channel_id),
+        wait_until="domcontentloaded",
+        timeout=CHANNEL_READY_TIMEOUT_MS,
+    )
     try:
         # Espera a caixa de mensagem aparecer (indica que o canal carregou).
         await page.locator('div[role="textbox"]').first.wait_for(
