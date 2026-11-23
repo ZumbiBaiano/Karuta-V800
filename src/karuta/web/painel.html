@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karuta — cartas por conta</title>
+<link rel="stylesheet" href="/painel.css">
+</head>
+<body>
+<div class="app">
+
+<aside>
+  <div class="marca"><b>KARUTA</b><span>painel de cartas</span></div>
+
+  <div class="bloco">
+    <h3>conta</h3>
+    <div class="nav" id="nav-contas"></div>
+  </div>
+
+  <div class="bloco">
+    <h3>secao</h3>
+    <div class="nav" id="nav-secoes"></div>
+  </div>
+
+  <div class="bloco" id="bloco-visao">
+    <h3>visao</h3>
+    <div class="nav" id="nav-visoes">
+      <button data-visao="tabela" aria-pressed="true"><span class="rotulo">tabela densa</span></button>
+      <button data-visao="galeria" aria-pressed="false"><span class="rotulo">galeria</span></button>
+      <button data-visao="colunas" aria-pressed="false"><span class="rotulo">colunas por conta</span></button>
+    </div>
+  </div>
+
+  <div class="rodape-aside">
+    <div class="linha-ctrl">
+      <label for="limite">limite</label>
+      <select id="limite">
+        <option>200</option><option selected>500</option>
+        <option>1000</option><option>5000</option>
+      </select>
+    </div>
+    <div class="linha-ctrl">
+      <label for="auto">auto</label>
+      <select id="auto">
+        <option value="0">off</option>
+        <option value="10" selected>10s</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+      </select>
+    </div>
+    <div class="linha-ctrl">
+      <label for="tema">tema</label>
+      <select id="tema">
+        <option value="auto" selected>auto</option>
+        <option value="light">claro</option>
+        <option value="dark">escuro</option>
+      </select>
+    </div>
+    <div class="linha-ctrl"><span class="pulso" id="pulso"></span><span class="estado" id="estado">carregando…</span></div>
+  </div>
+</aside>
+
+<main>
+  <div class="topo">
+    <h1 id="titulo">visao geral<small id="subtitulo">todas as contas</small></h1>
+    <div class="visoes" id="visoes-topo">
+      <button data-visao="tabela" aria-pressed="true">tabela</button>
+      <button data-visao="galeria" aria-pressed="false">galeria</button>
+      <button data-visao="colunas" aria-pressed="false">colunas</button>
+    </div>
+    <div class="busca"><input type="search" id="busca" placeholder="personagem, serie, codigo…"></div>
+    <button class="icone-btn" id="recarregar" title="recarregar agora">↻</button>
+  </div>
+
+  <div id="erro"></div>
+
+  <section class="resumo">
+    <div class="heroi">
+      <div class="valor" id="heroi-valor">—</div>
+      <div class="rotulo" id="heroi-rotulo">cartas no banco</div>
+      <div class="sub" id="heroi-sub"></div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="chips" id="chips"></section>
+  <section class="conteudo" id="conteudo"></section>
+  <div class="rodape" id="rodape"></div>
+</main>
+
+</div>
+
+<div id="dica" role="tooltip"></div>
+
+<script src="/painel.js"></script>
+</body>
+</html>

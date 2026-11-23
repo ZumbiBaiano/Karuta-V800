@@ -95,6 +95,51 @@ karuta banco desejadas               # mais pedidas por outros jogadores
 karuta banco burn --limite 50        # candidatas a queimar
 ```
 
+### Painel web
+
+```bash
+karuta painel                        # http://127.0.0.1:8787
+karuta painel --porta 9000 --abrir   # outra porta, abrindo o navegador
+karuta painel --host 0.0.0.0         # acessível de outra máquina na rede
+```
+
+#### Pelo VS Code
+
+O projeto já vem com `.vscode/` configurado (arquivos locais — `.vscode/` está no `.gitignore`):
+
+1. **Ctrl+Shift+P → "Tasks: Run Task" → "Karuta: painel"** — sobe o servidor num terminal dedicado. (Tem também "Karuta: painel (escolher porta)" e "Karuta: resumo do banco".)
+2. **Ctrl+clique no link `http://127.0.0.1:8787`** que aparece no terminal — abre o painel **dentro do editor**, numa aba ao lado do código.
+
+O passo 2 funciona por causa de `workbench.externalUriOpeners` em `.vscode/settings.json`, que manda qualquer URL de `127.0.0.1`/`localhost` pro Simple Browser embutido. Sem isso, o Ctrl+clique iria pro navegador do Windows.
+
+Alternativas: **Ctrl+Shift+P → "Simple Browser: Show"** e colar a URL; ou a aba **PORTS** (a porta 8787 aparece sozinha rotulada `karuta painel`, com o ícone de globo pra abrir no navegador). Pra mexer no código do painel com breakpoint, **F5 → "Karuta: painel (debug)"**.
+
+Painel local, só leitura, pode rodar junto com `karuta start`. Cobre as três tabelas de carta: `cartas`, `cartas_job` e `cartas_desejadas`.
+
+Barra lateral: conta (a/b/c/todas), seção e visão. Topo: número-herói + stat tiles (avaliadas com medidor, pendentes, job, desejadas, melhor esforço, mais desejada).
+
+**Visão geral** — gráficos calculados sobre as tabelas inteiras, não sobre a página carregada:
+
+- *cartas por conta* — barra empilhada com rótulo direto
+- *ritmo de pick* — cartas pegas em drop por hora nas últimas 24h (cai pra dias se não houve drop); só `origem='drop'`, porque o scan importa a coleção toda de uma vez e o pico achataria o resto
+- *distribuição de estrelas* — 0 a 5★, empilhado por conta
+- *esforço das cartas job* — histograma das faixas de k!wi
+- *séries mais desejadas* — top 10 por soma de desejos
+
+**Seções de tabela** (`cartas`, `job`, `desejadas`), cada uma com três visões:
+
+| visão | pra quê |
+|---|---|
+| **tabela densa** | varrer tudo: todas as colunas, ordenação por clique, barra proporcional na métrica principal |
+| **galeria** | olhar carta a carta: personagem, série, estrelas, print e medidores de esforço/desejos |
+| **colunas por conta** | comparar as contas lado a lado, cada uma com seu top da métrica |
+
+Filtros rápidos em chips (todas / avaliadas / pendentes / job / desejada / 3★+). Em `cartas` eles rodam **no SQL**, não no navegador: a tabela tem milhares de linhas e o painel carrega só umas centenas, então filtrar no cliente dava zero resultado — as mais recentes são scans ainda sem `k!wi`. A contagem no chip é o total real da tabela.
+
+Ainda: busca por texto, limite de linhas, auto-refresh (10s por padrão) e tema claro/escuro/auto. Cada conta tem uma cor fixa (paleta validada pra daltonismo), sempre acompanhada da letra — cor nunca é o único canal. Se o banco piscar, a página avisa e tenta de novo no refresh seguinte.
+
+A página vive em `src/karuta/web/` (`painel.html` + `painel.css` + `painel.js`), lida do disco a cada request: dá pra mexer no layout e só dar F5, sem reiniciar o servidor nem o bot. Os gráficos são SVG montado na mão — nenhuma biblioteca externa, o painel funciona offline.
+
 Limiares de classificação ficam em `avaliacao:` no `config.yaml`. O banco é **opcional**: se cair, o bot continua pegando cartas e só loga aviso — perder registro não pode custar um pick.
 
 ## Setup
@@ -149,6 +194,11 @@ src/karuta/
 ├── drop_detector.py    # MutationObserver injetado p/ detectar drops
 ├── account.py          # encapsula 1 conta/navegador
 ├── orchestrator.py     # loop principal: rotação + cooldown
+├── painel.py           # painel web local: servidor + consultas
+├── web/                # a pagina do painel, lida do disco a cada request
+│   ├── painel.html     #   marcacao
+│   ├── painel.css      #   estilos (tokens de cor claro/escuro)
+│   └── painel.js       #   logica + graficos em SVG
 └── logging_setup.py    # loguru config
 ```
 

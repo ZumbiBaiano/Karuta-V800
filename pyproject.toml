@@ -31,6 +31,11 @@ karuta = "karuta.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# A pagina do painel mora em src/karuta/web; sem isto um install nao-editavel
+# instalaria o painel.py sem o HTML/CSS/JS.
+[tool.setuptools.package-data]
+karuta = ["web/*.html", "web/*.css", "web/*.js"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

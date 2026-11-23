@@ -401,19 +401,68 @@ def banco_cmd(
         console.print(tabela)
 
 
+@app.command("painel")
+def painel_cmd(
+    porta: Annotated[int, typer.Option(help="Porta do servidor local.")] = 8787,
+    host: Annotated[str, typer.Option(help="127.0.0.1 so local; 0.0.0.0 expoe na rede.")] = "127.0.0.1",
+    abrir: Annotated[bool, typer.Option("--abrir", help="Tenta abrir no navegador.")] = False,
+    log_level: Annotated[str, typer.Option(help="DEBUG/INFO/WARNING/ERROR")] = "INFO",
+):
+    """Painel web local com as cartas de cada conta (cartas, job, desejadas)."""
+    from . import db, painel
+
+    cfg = _bootstrap(log_level)
+    if not cfg.banco.ativo:
+        typer.echo("banco desativado no config.yaml (banco.ativo: false)", err=True)
+        raise typer.Exit(1)
+
+    # Testa a conexao antes de subir o servidor: erro de DSN aqui eh mensagem
+    # no terminal, nao uma pagina vermelha depois.
+    try:
+        with db.conectar(cfg.banco.dsn):
+            pass
+    except Exception as e:
+        typer.echo(f"nao consegui conectar: {e}", err=True)
+        raise typer.Exit(1) from None
+
+    if abrir:
+        painel.abrir_navegador(f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{porta}")
+
+    painel.servir(dsn=cfg.banco.dsn, host=host, porta=porta)
+
+
 @app.command("transferir")
 def transferir_cmd(
     de: Annotated[str, typer.Option(help="Conta de origem (b ou c).")],
     para: Annotated[str, typer.Option(help="Conta de destino.")] = "a",
     lote: Annotated[int, typer.Option(help="Cartas por sessao de multitrade.")] = 30,
     max_cartas: Annotated[int, typer.Option(help="Teto total. 0 = todas.")] = 0,
+    da_colecao: Annotated[
+        bool,
+        typer.Option(
+            "--da-colecao",
+            help="Le a colecao real no Karuta em vez de confiar no banco."
+            " Necessario quando a conta tem cartas que o bot nunca catalogou.",
+        ),
+    ] = False,
+    min_desejos: Annotated[
+        int, typer.Option(help="--da-colecao: so transfere com desejos >= isto."),
+    ] = 50,
+    max_paginas: Annotated[
+        int, typer.Option(help="--da-colecao: paginas de k!c a ler. 0 = todas."),
+    ] = 12,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="So lista o que seria transferido.")
     ] = False,
     log_level: Annotated[str, typer.Option(help="DEBUG/INFO/WARNING/ERROR")] = "INFO",
 ):
     """
-    Move as cartas boas (job/desejada) de uma conta para outra via k!multitrade.
+    Move as cartas boas de uma conta para outra via k!multitrade.
+
+    Por padrao usa a classificacao do banco (job/desejada). Com --da-colecao
+    le a colecao direto do Karuta, ordenada por desejo: use quando a conta
+    tiver cartas que o bot nunca catalogou — o banco so conhece o que ele
+    mesmo pegou, e isso pode ser uma fracao pequena do total.
 
     Pare o bot antes: os perfis do navegador ficam travados enquanto ele roda.
     """
