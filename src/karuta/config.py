@@ -130,6 +130,10 @@ class KarutaConfig(BaseModel):
     # o bot nao precisa de janela pra funcionar. Headless tambem deixa rodar
     # como service sem depender de X/WSLg.
     headless: bool = True
+    # Imagens das cartas sao o maior custo de memoria do bot e ele nao olha
+    # pixel nenhum: le reacoes e textos por atributo do DOM. Ligue so pra
+    # depurar com print legivel.
+    carregar_imagens: bool = False
     rotation_order: list[AccountId] = Field(default_factory=lambda: ["a", "b", "c"])
     pick_button_index: dict[AccountId, int]
     event_icon: EventIconConfig = Field(default_factory=EventIconConfig)

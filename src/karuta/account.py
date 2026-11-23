@@ -53,7 +53,12 @@ class Account:
     async def start(self, pw: Playwright, app_cfg: KarutaConfig) -> None:
         mode = "headless" if app_cfg.headless else "com janela"
         self.log.info(f"abrindo navegador {self.cfg.browser} ({mode})")
-        self.context = await launch_for_account(pw, self.cfg, headless=app_cfg.headless)
+        self.context = await launch_for_account(
+            pw,
+            self.cfg,
+            headless=app_cfg.headless,
+            carregar_imagens=app_cfg.carregar_imagens,
+        )
         if self.context.pages:
             self.page = self.context.pages[0]
         else:

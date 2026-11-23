@@ -27,6 +27,16 @@ pick_cooldown_seconds: 660
 # Timeout para o drop aparecer apos o `kd` (segundos).
 drop_timeout_seconds: 8
 
+# Rodar os navegadores sem janela. true tambem permite rodar como service,
+# sem depender de X/WSLg.
+headless: true
+
+# Carregar as imagens das cartas. O bot nunca olha pixel — le reacoes e
+# textos por atributo do DOM — e as imagens sao o maior custo de memoria
+# dele. Ligue so pra depurar com print legivel. Os fluxos de login ignoram
+# isto e sempre carregam imagem (o QR code precisa renderizar).
+carregar_imagens: false
+
 # Ordem em que as contas alternam o envio de `kd`.
 rotation_order: [a, b, c]
 

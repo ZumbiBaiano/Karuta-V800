@@ -37,33 +37,54 @@ async def launch_for_account(
     pw: Playwright,
     account: AccountConfig,
     headless: bool = False,
+    carregar_imagens: bool = True,
 ) -> BrowserContext:
     """
     Abre um BrowserContext persistente para a conta.
 
     - Chrome: usa channel="chrome" se executable_path nao foi dado.
     - Brave / Opera GX: ambos sao Chromium-based, basta apontar executable_path.
+
+    carregar_imagens=False corta o maior custo de memoria do bot: as imagens
+    das cartas. O padrao e True porque os fluxos de login PRECISAM delas — o
+    login por QR depende do codigo renderizar, e os prints de diagnostico
+    ficariam em branco. Quem desliga e o laco principal, que le tudo por
+    atributo do DOM e nunca por pixel.
     """
     account.profile_dir.mkdir(parents=True, exist_ok=True)
     _clean_singleton_locks(account.profile_dir)
+
+    args = [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-gpu",
+    ]
+
+    if headless:
+        # Mesmo com --disable-gpu o Chromium ainda sobe um processo de GPU
+        # separado rodando SwiftShader (render por software). Sem janela pra
+        # pintar, ele nao serve pra nada e custava ~143 MB por conta.
+        args += ["--in-process-gpu", "--disable-software-rasterizer"]
+    else:
+        # So fazem sentido com janela: no WSLg, sem forcar X11 o Chromium
+        # tenta Wayland, nao acha o socket e a janela abre vazia. O
+        # window-position evita as 3 janelas espalhadas pelo display.
+        args += [
+            "--ozone-platform=x11",
+            f"--window-position={_window_position(account.profile_dir)}",
+            "--window-size=1280,800",
+        ]
+
+    if not carregar_imagens:
+        args.append("--blink-settings=imagesEnabled=false")
 
     kwargs: dict = {
         "user_data_dir": str(account.profile_dir),
         "headless": headless,
         "user_agent": USER_AGENT,
         "viewport": {"width": 1280, "height": 800},
-        "args": [
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-blink-features=AutomationControlled",
-            f"--window-position={_window_position(account.profile_dir)}",
-            "--window-size=1280,800",
-            # WSLg: sem isso a janela abre em "[WARN:COPY MODE]" e fica
-            # cinza/sem pintar. Forcar X11 + desligar GPU usa o caminho de
-            # render por software, que o WSLg consegue exibir.
-            "--ozone-platform=x11",
-            "--disable-gpu",
-        ],
+        "args": args,
         "ignore_default_args": ["--enable-automation"],
     }
 
