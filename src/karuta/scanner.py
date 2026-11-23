@@ -5,8 +5,9 @@ e avalia o Base value de cada carta via k!workerinfo.
 Uso tipico: filtrar workers com base value >= threshold pra montar
 um time bom de worker. Veja `karuta scan --help`.
 
-Roda separado do bot principal de drop. As mensagens sao enviadas
-no mesmo canal configurado em config.yaml.
+Roda separado do bot principal de drop. As mensagens sao enviadas no canal de
+info (`info_channel_id` no config.yaml), o mesmo dos demais comandos de
+consulta; sem esse canal configurado, caem no canal de drop.
 """
 
 from __future__ import annotations
@@ -59,11 +60,24 @@ async def _paced_send(page: Page, text: str, limiter: CommandRateLimiter) -> Non
 
 
 # Markers que indicam que a mensagem eh uma RESPOSTA do Karuta (nao cooldown).
+#
+# IMPORTANTE: todo comando novo precisa ter o cabecalho da resposta dele aqui.
+# Sem isso `_classify_after` devolve 'none', o comando eh reenviado 3x e
+# desiste — foi o que aconteceu com `k!ci`, cuja resposta comeca com
+# "Card Details" e nao casava com nenhum marker.
 _KARUTA_OK_MARKERS = (
-    "Worker Details",
-    "Card Collection",
-    "Cards owned by",
-    "Base value",
+    "Worker Details",      # k!wi
+    "Card Collection",     # k!c
+    "Cards owned by",      # k!c
+    "Base value",          # k!wi
+    "Card Details",        # k!ci
+    "Character Lookup",    # k!lu
+    "Wishlisted",          # k!lu
+    "Dropped on",          # k!ci
+    "Burn Card",           # kb
+    "Inventory",           # k!i
+    "Items carried by",    # k!i
+    "Bits carried by",     # k!bi
 )
 
 
@@ -330,14 +344,14 @@ async def fetch_worker_info(
     settle_seconds: float = 3.5,
 ) -> CardScan | None:
     """Envia k!wi <code> e parseia base value + effort total + nome."""
-    assert account.page is not None
+    page = await account.canal_info()
     ok = await _send_with_cooldown_retry(
-        account.page, f"k!wi {code}", limiter, settle_seconds=settle_seconds,
+        page, f"k!wi {code}", limiter, settle_seconds=settle_seconds,
     )
     if not ok:
         return None
     text = await _latest_karuta_text(
-        account.page,
+        page,
         contains_any=["Worker Details", "Base value", "Effort"],
     )
     if not text:
@@ -374,8 +388,8 @@ async def _read_collection_message(
     apos clicar a reaction de proxima pagina) e retorna:
       (texto_bruto, entries_parseadas, (range_start, range_end, total))
     """
-    assert account.page is not None
-    msg = account.page.locator(f'li[id$="-{message_id}"]')
+    page = await account.canal_info()
+    msg = page.locator(f'li[id$="-{message_id}"]')
     try:
         text = (await msg.inner_text()) or ""
     except Exception:
@@ -448,18 +462,18 @@ async def _collect_all_entries(
     todas as CollectionEntry. NAO faz k!wi aqui — paginacao rapida mantem
     os botoes do embed vivos (eles expiram apos minutos de inatividade).
     """
-    assert account.page is not None
+    page = await account.canal_info()
 
     account.log.info("scanner: [fase 1] k!c inicial")
     ok = await _send_with_cooldown_retry(
-        account.page, "k!c", limiter, settle_seconds=2.5,
+        page, "k!c", limiter, settle_seconds=2.5,
     )
     if not ok:
         account.log.error("scanner: [fase 1] falha no k!c inicial")
         return []
 
     await asyncio.sleep(1.5)
-    msg_id = await find_karuta_message_id(account.page, "Card Collection")
+    msg_id = await find_karuta_message_id(page, "Card Collection")
     if not msg_id:
         account.log.error("scanner: [fase 1] nao achei mensagem do Card Collection")
         return []
@@ -496,21 +510,21 @@ async def _collect_all_entries(
         if range_info is not None and range_info[1] >= range_info[2]:
             account.log.info("scanner: [fase 1] ultima pagina alcancada")
             break
-        if await is_next_page_disabled(account.page, msg_id):
+        if await is_next_page_disabled(page, msg_id):
             account.log.info("scanner: [fase 1] botao ▶ desabilitado, fim")
             break
 
         # Clica ▶ pra proxima pagina
-        clicked = await click_next_page_reaction(account.page, msg_id)
+        clicked = await click_next_page_reaction(page, msg_id)
         if not clicked:
-            buttons = await list_message_buttons(account.page, msg_id)
-            reactions = await list_message_reactions(account.page, msg_id)
+            buttons = await list_message_buttons(page, msg_id)
+            reactions = await list_message_reactions(page, msg_id)
             account.log.warning(
                 f"scanner: [fase 1] nao consegui clicar ▶ na pagina {page_num}. "
                 f"buttons={buttons} reactions={reactions}"
             )
             html_path = f"./logs/scanner_msg_html_{account.id}_p{page_num}_{int(time.time())}.html"
-            await dump_message_html(account.page, msg_id, html_path)
+            await dump_message_html(page, msg_id, html_path)
             account.log.warning(f"scanner: [fase 1] HTML dumpado em {html_path}")
             account.log.warning(
                 f"scanner: [fase 1] encerrando coleta com {len(all_entries)} codes parciais"
@@ -552,7 +566,7 @@ async def scan_account(
     Escreve matches incrementalmente via `on_match`.
     """
     t0 = time.time()
-    assert account.page is not None
+    assert account.info_page is not None
     limiter = CommandRateLimiter(min_gap_seconds=command_gap_seconds)
 
     HARD_PAGE_CAP = 200

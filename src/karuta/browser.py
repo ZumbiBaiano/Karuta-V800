@@ -19,6 +19,20 @@ def _clean_singleton_locks(profile_dir) -> None:
             pass
 
 
+def _window_position(profile_dir) -> str:
+    """
+    Posicao inicial da janela, em cascata por conta.
+
+    Sem isso o Chromium escolhe a posicao sozinho e as 3 janelas abrem
+    espalhadas de forma imprevisivel (o display do WSLg aqui tem 3840px de
+    largura). O offset mantem as tres proximas e sobrepostas so o suficiente
+    pra dar pra alternar entre elas.
+    """
+    suffix = profile_dir.name[-1:].lower()
+    slot = {"a": 0, "b": 1, "c": 2}.get(suffix, 0)
+    return f"{40 + slot * 60},{40 + slot * 60}"
+
+
 async def launch_for_account(
     pw: Playwright,
     account: AccountConfig,
@@ -42,6 +56,13 @@ async def launch_for_account(
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-blink-features=AutomationControlled",
+            f"--window-position={_window_position(account.profile_dir)}",
+            "--window-size=1280,800",
+            # WSLg: sem isso a janela abre em "[WARN:COPY MODE]" e fica
+            # cinza/sem pintar. Forcar X11 + desligar GPU usa o caminho de
+            # render por software, que o WSLg consegue exibir.
+            "--ozone-platform=x11",
+            "--disable-gpu",
         ],
         "ignore_default_args": ["--enable-automation"],
     }
