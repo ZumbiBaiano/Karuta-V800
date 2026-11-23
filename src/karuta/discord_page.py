@@ -681,6 +681,102 @@ async def wait_for_message_text_change(
     return False
 
 
+# ----------------------------------------------------------------------
+# Multitrade: transferencia de cartas em lote entre duas contas
+# ----------------------------------------------------------------------
+#
+# O fluxo tem TRES emoji diferentes, em tres etapas, e confundi-los quebra
+# no meio sem erro visivel:
+#   1. quem recebe o pedido aceita com  ☑️
+#   2. os DOIS lados travam com         🔒
+#   3. os DOIS lados confirmam com      ✅
+MT_ACEITAR = "☑️"
+MT_TRAVAR = "🔒"
+MT_CONFIRMAR = "✅"
+
+# A sessao morre em 3 minutos — tudo abaixo corre contra esse relogio.
+MT_EXPIRA_SEGUNDOS = 180
+
+
+async def mt_localizar_sessao(page: Page, lookback: int = 8) -> str | None:
+    """ID da mensagem da sessao de trade aberta, se houver."""
+    return await page.evaluate(
+        """(n) => {
+             const lis=[...document.querySelectorAll('li[id^="chat-messages-"]')];
+             for (let i=lis.length-1; i>=Math.max(0,lis.length-n); i--) {
+               const t = lis[i].innerText || '';
+               if (/Trade Request|trade session|trade has been/i.test(t))
+                 return lis[i].id.split('-').pop();
+             }
+             return null;
+           }""",
+        lookback,
+    )
+
+
+async def mt_botoes(page: Page, message_id: str) -> list[str]:
+    """Emojis dos botoes atualmente na mensagem da sessao."""
+    return await page.evaluate(
+        """(mid) => {
+             const li = document.querySelector(`li[id$="-${mid}"]`);
+             if (!li) return [];
+             return [...li.querySelectorAll('button')]
+               .map(b => b.querySelector('img[data-name]'))
+               .filter(Boolean)
+               .map(i => i.getAttribute('data-name'));
+           }""",
+        message_id,
+    )
+
+
+async def mt_clicar(page: Page, message_id: str, emoji: str, timeout_ms: int = 10_000) -> bool:
+    """
+    Clica um botao da sessao pelo emoji.
+
+    Pelo emoji e nao por indice de proposito: a ordem muda entre etapas e o
+    ❌ vem ANTES do ✅ — indexar por posicao cancelaria a troca.
+    """
+    await dismiss_overlays(page)
+    sel = f'li[id$="-{message_id}"] button:has(img[data-name="{emoji}"])'
+    try:
+        btn = page.locator(sel).first
+        await btn.wait_for(state="visible", timeout=timeout_ms)
+        await btn.click()
+        return True
+    except PWTimeoutError:
+        logger.debug(f"botao {emoji} nao apareceu na sessao {message_id}")
+        return False
+
+
+async def mt_adicionar_cartas(page: Page, codigos: list[str]) -> None:
+    """
+    Poe as cartas na sessao: um unico envio com os codigos separados por virgula.
+
+    Usa fill() em vez do send_message normal porque aquele digita em ritmo
+    humano (40-90ms/caractere). Com 30 codigos sao ~270 caracteres, ou seja
+    ~20s so digitando — e a sessao inteira dura 180s. fill() e instantaneo.
+    """
+    await dismiss_overlays(page)
+    box = page.locator('div[role="textbox"]').last
+    await box.click()
+    await box.press("Control+A")
+    await box.press("Delete")
+    await box.fill(",".join(codigos))
+    await box.press("Enter")
+
+
+async def mt_aceita(page: Page, message_id: str) -> bool:
+    """A sessao chegou ao estado final de aceite?"""
+    txt = await page.evaluate(
+        """(mid) => {
+             const li = document.querySelector(`li[id$="-${mid}"]`);
+             return li ? li.innerText : '';
+           }""",
+        message_id,
+    )
+    return "trade has been accepted" in (txt or "").lower()
+
+
 async def estado_da_pagina(page: Page) -> dict:
     """
     Estado fora das mensagens que costuma explicar um clique que nao passa.

@@ -15,6 +15,7 @@ from rich.table import Table
 from .account import Account
 from .browser import launch_for_account
 from .config import AccountId, load_config
+from .discord_page import goto_channel, send_message
 from .logging_setup import setup_logging
 from .orchestrator import STATE_FILE, Orchestrator
 from .scanner import CardScan, PrefilterRule, render_markdown, scan_account
@@ -398,6 +399,200 @@ def banco_cmd(
                 f"#{r['numero_print']}" if r["numero_print"] else "—",
             )
         console.print(tabela)
+
+
+@app.command("transferir")
+def transferir_cmd(
+    de: Annotated[str, typer.Option(help="Conta de origem (b ou c).")],
+    para: Annotated[str, typer.Option(help="Conta de destino.")] = "a",
+    lote: Annotated[int, typer.Option(help="Cartas por sessao de multitrade.")] = 30,
+    max_cartas: Annotated[int, typer.Option(help="Teto total. 0 = todas.")] = 0,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="So lista o que seria transferido.")
+    ] = False,
+    log_level: Annotated[str, typer.Option(help="DEBUG/INFO/WARNING/ERROR")] = "INFO",
+):
+    """
+    Move as cartas boas (job/desejada) de uma conta para outra via k!multitrade.
+
+    Pare o bot antes: os perfis do navegador ficam travados enquanto ele roda.
+    """
+    cfg = _bootstrap(log_level)
+    if de not in cfg.accounts or para not in cfg.accounts:
+        typer.echo(f"conta inexistente: {de} ou {para}", err=True)
+        raise typer.Exit(1)
+    if de == para:
+        typer.echo("origem e destino sao a mesma conta", err=True)
+        raise typer.Exit(1)
+    if not cfg.accounts[de].discord_user_id:
+        typer.echo(f"falta discord_user_id da conta '{de}' no config", err=True)
+        raise typer.Exit(1)
+    if not cfg.banco.ativo:
+        typer.echo("banco desativado: sem ele nao da pra saber o que ja foi"
+                   " transferido nem registrar o resultado", err=True)
+        raise typer.Exit(1)
+
+    from . import db
+
+    conn = db.conectar(cfg.banco.dsn)
+    pendentes = db.cartas_para_transferir(conn, de, para, limite=max_cartas)
+    if not pendentes:
+        typer.echo(f"nada a transferir de '{de}' para '{para}'")
+        raise typer.Exit(0)
+
+    tabela = Table(title=f"{len(pendentes)} cartas de '{de}' para '{para}'")
+    for col in ("codigo", "personagem", "esforco", "base", "desejos"):
+        tabela.add_column(col)
+    for r in pendentes[:15]:
+        tabela.add_row(r["codigo"], (r["personagem"] or "—")[:24],
+                       str(r["esforco_total"]), str(r["valor_base"]),
+                       str(r["desejos"]))
+    console.print(tabela)
+    if len(pendentes) > 15:
+        console.print(f"  ... e mais {len(pendentes) - 15}")
+
+    lotes = (len(pendentes) + lote - 1) // lote
+    console.print(f"\n{lotes} sessao(oes) de multitrade, ate {lote} cartas cada")
+    if dry_run:
+        console.print("[yellow]dry-run: nada foi enviado[/yellow]")
+        raise typer.Exit(0)
+
+    asyncio.run(_transferir_flow(cfg, conn, [r["codigo"] for r in pendentes],
+                                 de, para, lote))
+
+
+async def _transferir_flow(cfg, conn, codigos: list[str], de: str, para: str,
+                           lote: int) -> None:
+    """
+    Executa as sessoes de multitrade, um lote por sessao.
+
+    O destino abre a sessao e a origem aceita — essa e a ordem que o Karuta
+    espera: quem recebe o pedido e quem clica no ☑️.
+
+    O banco so e atualizado depois de ler "The trade has been accepted": se
+    gravasse antes, uma sessao expirada deixaria o banco dizendo que a carta
+    mudou de dono sem ela ter saido do lugar.
+    """
+    from . import db
+    from .discord_page import (
+        MT_ACEITAR,
+        MT_CONFIRMAR,
+        MT_TRAVAR,
+        mt_aceita,
+        mt_adicionar_cartas,
+        mt_botoes,
+        mt_clicar,
+        mt_localizar_sessao,
+    )
+
+    id_origem = cfg.accounts[de].discord_user_id
+    canal = cfg.canal_info_id or cfg.channel_id
+    total_ok = 0
+
+    async with async_playwright() as pw:
+        # Os dois navegadores sobem ANTES de qualquer comando: a sessao de
+        # trade expira em 3 min, e abrir o Discord leva ate 1 min.
+        ctx_dest = await launch_for_account(
+            pw, cfg.accounts[para], headless=cfg.headless,
+            carregar_imagens=cfg.carregar_imagens)
+        ctx_orig = await launch_for_account(
+            pw, cfg.accounts[de], headless=cfg.headless,
+            carregar_imagens=cfg.carregar_imagens)
+        try:
+            pg_dest = ctx_dest.pages[0] if ctx_dest.pages else await ctx_dest.new_page()
+            pg_orig = ctx_orig.pages[0] if ctx_orig.pages else await ctx_orig.new_page()
+            await goto_channel(pg_dest, cfg.guild_id, canal)
+            await goto_channel(pg_orig, cfg.guild_id, canal)
+            logger.info(f"contas '{para}' e '{de}' prontas no canal {canal}")
+
+            for i in range(0, len(codigos), lote):
+                parte = codigos[i:i + lote]
+                n = i // lote + 1
+                logger.info(f"sessao {n}: {len(parte)} cartas")
+                ok = await _uma_sessao(
+                    pg_dest, pg_orig, id_origem, parte,
+                    MT_ACEITAR, MT_TRAVAR, MT_CONFIRMAR,
+                    mt_localizar_sessao, mt_botoes, mt_clicar,
+                    mt_adicionar_cartas, mt_aceita,
+                )
+                if ok:
+                    gravadas = db.transferir_cartas(conn, parte, de, para)
+                    total_ok += len(parte)
+                    logger.info(f"sessao {n} aceita; {gravadas} registradas no banco")
+                else:
+                    logger.error(f"sessao {n} falhou; cartas seguem com '{de}'")
+                    break
+                await asyncio.sleep(12)  # folga entre sessoes
+        finally:
+            for c in (ctx_orig, ctx_dest):
+                try:
+                    await c.close()
+                except Exception:
+                    pass
+
+    logger.info(f"total transferido: {total_ok} de {len(codigos)}")
+
+
+async def _uma_sessao(pg_dest, pg_orig, id_origem, codigos, ACEITAR, TRAVAR,
+                      CONFIRMAR, localizar, botoes, clicar, adicionar,
+                      aceita) -> bool:
+    """Uma sessao de multitrade do inicio ao aceite. True se concluiu."""
+    await send_message(pg_dest, f"k!multitrade <@{id_origem}>")
+    await asyncio.sleep(5)
+
+    mid = await localizar(pg_orig)
+    if not mid:
+        logger.error("a origem nao viu o pedido de trade")
+        return False
+
+    if not await clicar(pg_orig, mid, ACEITAR):
+        logger.error(f"origem nao conseguiu aceitar (botao {ACEITAR})")
+        return False
+    await asyncio.sleep(4)
+
+    await adicionar(pg_orig, codigos)
+    await asyncio.sleep(4)
+
+    # Confere que as cartas entraram antes de travar: travar com a lista
+    # incompleta fecharia a troca pela metade.
+    faltando = await _faltando_na_sessao(pg_orig, mid, codigos)
+    if faltando:
+        logger.error(f"nao entraram na sessao: {faltando[:5]}"
+                     f"{'...' if len(faltando) > 5 else ''}")
+        await clicar(pg_orig, mid, "❌")
+        return False
+
+    for pg, quem in ((pg_orig, "origem"), (pg_dest, "destino")):
+        if not await clicar(pg, mid, TRAVAR):
+            logger.error(f"{quem} nao conseguiu travar")
+            return False
+        await asyncio.sleep(3)
+
+    await asyncio.sleep(3)
+    if CONFIRMAR not in await botoes(pg_dest, mid):
+        logger.error("etapa de confirmacao nao apareceu apos travar")
+        return False
+
+    for pg, quem in ((pg_dest, "destino"), (pg_orig, "origem")):
+        if not await clicar(pg, mid, CONFIRMAR):
+            logger.error(f"{quem} nao conseguiu confirmar")
+            return False
+        await asyncio.sleep(3)
+
+    await asyncio.sleep(4)
+    return await aceita(pg_dest, mid)
+
+
+async def _faltando_na_sessao(page, message_id: str, codigos: list[str]) -> list[str]:
+    """Codigos que NAO aparecem no painel da sessao."""
+    texto = await page.evaluate(
+        """(mid) => {
+             const li = document.querySelector(`li[id$="-${mid}"]`);
+             return li ? li.innerText : '';
+           }""",
+        message_id,
+    )
+    return [c for c in codigos if c not in (texto or "")]
 
 
 @app.command()

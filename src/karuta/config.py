@@ -16,6 +16,13 @@ class AccountConfig(BaseModel):
     browser: BrowserKind
     profile_dir: Path
     executable_path: Path | None = None
+    # ID numerico do Discord, usado como alvo do k!multitrade. Precisa ser o
+    # ID: o Karuta recusa nome de usuario ("that user was not found"), e as
+    # contas b e c compartilham o mesmo nome de exibicao, entao nem daria pra
+    # distingui-las por nome. Para descobrir: Discord > Configuracoes >
+    # Avancado > Modo de desenvolvedor, depois botao direito no proprio perfil
+    # > Copiar ID do usuario.
+    discord_user_id: str = ""
 
     @field_validator("profile_dir", "executable_path", mode="before")
     @classmethod

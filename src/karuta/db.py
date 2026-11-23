@@ -258,6 +258,26 @@ CREATE TRIGGER cartas_atualizada_em
     BEFORE UPDATE ON cartas
     FOR EACH ROW EXECUTE FUNCTION tocar_atualizada_em();
 
+-- Transferencias de carta entre contas (k!multitrade).
+--
+-- Append-only, como cartas_pegas: `cartas.conta_id` guarda o dono ATUAL e
+-- esta tabela guarda o caminho que a carta fez. Sem ela, consolidar tudo na
+-- conta 'a' apagaria a informacao de onde cada carta veio.
+--
+-- A chave unica em (codigo, de_conta, para_conta) torna a transferencia
+-- idempotente: se o processo cair no meio de um lote, reprocessar nao
+-- duplica nem reenvia o que ja foi.
+CREATE TABLE IF NOT EXISTS transferencias (
+    id            BIGSERIAL PRIMARY KEY,
+    codigo        TEXT        NOT NULL,
+    de_conta      TEXT        NOT NULL REFERENCES contas(id),
+    para_conta    TEXT        NOT NULL REFERENCES contas(id),
+    transferida_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (codigo, de_conta, para_conta)
+);
+
+CREATE INDEX IF NOT EXISTS transf_para_idx ON transferencias (para_conta, transferida_em DESC);
+
 -- ---------------------------------------------------------------------
 -- Visoes de consulta
 -- ---------------------------------------------------------------------
@@ -786,6 +806,83 @@ def inventario_desatualizado(
     if r is None or r["idade"] is None:
         return True
     return float(r["idade"]) >= minutos
+
+
+def transferir_cartas(
+    conn: psycopg.Connection, codigos: list[str], de: str, para: str,
+) -> int:
+    """
+    Move a posse das cartas no banco, depois do Karuta ter confirmado.
+
+    Chamar SO apos ler "The trade has been accepted" — se gravar antes, uma
+    sessao que expira deixa o banco afirmando que a carta trocou de dono
+    quando ela nao saiu do lugar.
+
+    Atualiza `cartas` E as tabelas de classificacao na mesma transacao: elas
+    carregam conta_id proprio, entao atualizar so a mestre deixaria
+    cartas_job/burn/desejadas apontando para o dono antigo, e o resumo por
+    conta passaria a mentir.
+    """
+    if not codigos:
+        return 0
+
+    with conn.transaction():
+        conn.execute(
+            "UPDATE cartas SET conta_id = %s WHERE codigo = ANY(%s) AND conta_id = %s",
+            (para, codigos, de),
+        )
+        for tabela in TABELAS_CLASSIFICACAO.values():
+            conn.execute(
+                f"UPDATE {tabela} SET conta_id = %s"
+                "  WHERE codigo = ANY(%s) AND conta_id = %s",
+                (para, codigos, de),
+            )
+        cur = conn.execute(
+            "INSERT INTO transferencias (codigo, de_conta, para_conta)"
+            "     SELECT unnest(%s::text[]), %s, %s"
+            " ON CONFLICT (codigo, de_conta, para_conta) DO NOTHING",
+            (codigos, de, para),
+        )
+    return cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(codigos)
+
+
+def codigos_ja_transferidos(conn: psycopg.Connection, de: str, para: str) -> set[str]:
+    """Cartas que ja foram deste par origem->destino, pra nao reenviar."""
+    linhas = conn.execute(
+        "SELECT codigo FROM transferencias WHERE de_conta = %s AND para_conta = %s",
+        (de, para),
+    ).fetchall()
+    return {r["codigo"] for r in linhas}
+
+
+def cartas_para_transferir(
+    conn: psycopg.Connection, de: str, para: str, limite: int = 0,
+) -> list[dict]:
+    """
+    Cartas boas (job ou desejada) que ainda estao com `de`.
+
+    UNION, nao UNION ALL: uma carta pode ser job E desejada ao mesmo tempo, e
+    entrar duas vezes faria o lote enviar o mesmo codigo repetido.
+    """
+    sql = """
+        SELECT c.codigo, c.personagem, c.serie, c.esforco_total, c.valor_base,
+               c.desejos
+          FROM cartas c
+         WHERE c.conta_id = %(de)s
+           AND c.codigo IN (
+                 SELECT codigo FROM cartas_job       WHERE conta_id = %(de)s
+                 UNION
+                 SELECT codigo FROM cartas_desejadas WHERE conta_id = %(de)s
+               )
+           AND c.codigo NOT IN (
+                 SELECT codigo FROM transferencias
+                  WHERE de_conta = %(de)s AND para_conta = %(para)s
+               )
+         ORDER BY c.esforco_total DESC NULLS LAST, c.desejos DESC NULLS LAST
+    """
+    if limite:
+        sql += " LIMIT %(limite)s"
+    return conn.execute(sql, {"de": de, "para": para, "limite": limite}).fetchall()
 
 
 def limpar_classificacoes(conn: psycopg.Connection) -> None:
